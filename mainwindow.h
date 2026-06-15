@@ -18,6 +18,7 @@
 #include <QMap>
 #include <QString>
 #include <QStringList>
+#include <QSystemTrayIcon>
 
 // Forward declarations (HD-5: prefer forward-decl over include).
 class QLineEdit;
@@ -25,6 +26,7 @@ class QScrollArea;
 class QLabel;
 class QButtonGroup;
 class QWidget;
+class QCloseEvent;
 
 namespace prjchoosetool
 {
@@ -44,6 +46,10 @@ public:
     explicit MainWindow(QWidget* p_parent = nullptr);
     ~MainWindow() override;
 
+protected:
+    // Closing the window hides it to the tray instead of quitting.
+    void closeEvent(QCloseEvent* p_event) override;
+
 private slots:
     void OnBrowse();
     void OnReload();
@@ -51,8 +57,14 @@ private slots:
     // A horizontal project option was picked -> show its variants.
     void OnProjectSelected();
 
+    // Tray interactions.
+    void OnTrayActivated(QSystemTrayIcon::ActivationReason reason);
+    void ShowFromTray();
+    void QuitApp();
+
 private:
     void    BuildUi();
+    void    SetupTray();
 
     // Scan baseDir for Data_User.* folders, grouped by project id.
     bool    ScanProjects(const QString& baseDir,
@@ -83,15 +95,4 @@ private:
     QLabel*      m_pVariantTitle{nullptr};
     QLabel*      m_pStatusLabel{nullptr};
 
-    // Recreated on every reload / selection; owned by their content widgets.
-    QButtonGroup* m_pProjectGroup{nullptr};
-    QButtonGroup* m_pVariantGroup{nullptr};
-
-    // Cached scan results.
-    QMap<QString, ProjectInfo> m_projects;
-    QMap<QString, QString>     m_activeVariants;
-};
-
-}  // namespace prjchoosetool
-
-#endif  // PRJCHOOSETOOL_MAINWINDOW_H
+    // Recreated 

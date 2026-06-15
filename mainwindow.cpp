@@ -10,19 +10,25 @@
 
 #include <cstdint>
 
+#include <QAction>
+#include <QApplication>
 #include <QButtonGroup>
+#include <QCloseEvent>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
 #include <QSettings>
+#include <QSystemTrayIcon>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -78,6 +84,7 @@ MainWindow::MainWindow(QWidget* p_parent)
     : QMainWindow(p_parent)
 {
     BuildUi();
+    SetupTray();
     OnReload();
 }
 
@@ -87,9 +94,89 @@ MainWindow::~MainWindow()
     // so no manual cleanup is required here.
 }
 
+void MainWindow::SetupTray()
+{
+    if (!QSystemTrayIcon::isSystemTrayAvailable()) {
+        // No tray: closing will quit normally (see closeEvent).
+        return;
+    }
+
+    // Keep the app alive after the window is hidden to the tray.
+    QApplication::setQuitOnLastWindowClosed(false);
+
+    m_pTrayIcon = new QSystemTrayIcon(
+        QIcon(QStringLiteral(":/appicon.png")), this);
+    m_pTrayIcon->setToolTip(QStringLiteral("Project Chooser"));
+
+    QMenu* p_menu = new QMenu(this);
+    QAction* p_showAction =
+        p_menu->addAction(QStringLiteral("Show window"));
+    p_menu->addSeparator();
+    QAction* p_quitAction =
+        p_menu->addAction(QStringLiteral("Quit"));
+
+    m_pTrayIcon->setContextMenu(p_menu);
+    m_pTrayIcon->show();
+
+    connect(p_showAction, &QAction::triggered,
+            this, &MainWindow::ShowFromTray);
+    connect(p_quitAction, &QAction::triggered,
+            this, &MainWindow::QuitApp);
+    connect(m_pTrayIcon, &QSystemTrayIcon::activated,
+            this, &MainWindow::OnTrayActivated);
+}
+
+void MainWindow::closeEvent(QCloseEvent* p_event)
+{
+    if (p_event == nullptr) {
+        return;
+    }
+
+    // A real quit (from the tray menu) or no tray available -> close.
+    if (m_forceQuit || m_pTrayIcon == nullptr) {
+        p_event->accept();
+        return;
+    }
+
+    // Otherwise hide to the tray and keep running in the background.
+    hide();
+    p_event->ignore();
+
+    if (!m_trayHintShown) {
+        m_pTrayIcon->showMessage(
+            QStringLiteral("Project Chooser"),
+            QStringLiteral("Still running in the tray. "
+                           "Right-click the icon to quit."),
+            QSystemTrayIcon::Information, 3000);
+        m_trayHintShown = true;
+    }
+}
+
+void MainWindow::OnTrayActivated(QSystemTrayIcon::ActivationReason reason)
+{
+    if (reason == QSystemTrayIcon::Trigger
+        || reason == QSystemTrayIcon::DoubleClick) {
+        ShowFromTray();
+    }
+}
+
+void MainWindow::ShowFromTray()
+{
+    showNormal();
+    raise();
+    activateWindow();
+}
+
+void MainWindow::QuitApp()
+{
+    m_forceQuit = true;
+    QApplication::quit();
+}
+
 void MainWindow::BuildUi()
 {
     setWindowTitle(QStringLiteral("Project Chooser - ProjectDefinition.dat"));
+    setWindowIcon(QIcon(QStringLiteral(":/appicon.png")));
     resize(560, 520);
 
     QWidget* p_central = new QWidget(this);
@@ -490,78 +577,4 @@ bool MainWindow::WriteDefinitions(const QString& datPath,
             ? QStringLiteral("\r\n")
             : QStringLiteral("\n");
 
-    // Make a backup before touching the original file.
-    const QString backupPath = datPath + QStringLiteral(".bak");
-    QFile::remove(backupPath);
-    QFile::copy(datPath, backupPath);
-
-    const QStringList lines = content.split(eol);
-    QStringList outLines;
-    outLines.reserve(lines.size());
-
-    QStringList updatedIds;
-    QStringList duplicateIds;
-    QMap<QString, bool> doneIds;
-
-    for (const QString& line : lines) {
-        const int32_t commaPos = static_cast<int32_t>(line.indexOf(','));
-        if (commaPos <= 0) {
-            outLines.append(line);
-            continue;
-        }
-
-        const QString id = line.left(commaPos).trimmed();
-        if (!selections.contains(id)) {
-            outLines.append(line);
-            continue;
-        }
-
-        if (doneIds.value(id, false)) {
-            // A second line with the same id - leave it untouched.
-            if (!duplicateIds.contains(id)) {
-                duplicateIds.append(id);
-            }
-            outLines.append(line);
-            continue;
-        }
-
-        const QString newFolder = selections.value(id);
-        outLines.append(id + QStringLiteral(",") + newFolder);
-        doneIds.insert(id, true);
-        updatedIds.append(id);
-    }
-
-    // Report any selected project that had no matching line.
-    QStringList notFound;
-    for (auto it = selections.constBegin();
-         it != selections.constEnd(); ++it) {
-        if (!doneIds.value(it.key(), false)) {
-            notFound.append(it.key());
-        }
-    }
-
-    QFile outFile(datPath);
-    if (!outFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        *p_message = QStringLiteral("Cannot open for writing: ") + datPath;
-        return false;
-    }
-    outFile.write(outLines.join(eol).toUtf8());
-    outFile.close();
-
-    QString msg =
-        QStringLiteral("Updated %1 line(s). Backup: %2")
-            .arg(updatedIds.size())
-            .arg(QFileInfo(backupPath).fileName());
-    if (!duplicateIds.isEmpty()) {
-        msg += QStringLiteral(" | Duplicate ids left untouched: ")
-               + duplicateIds.join(QStringLiteral(", "));
-    }
-    if (!notFound.isEmpty()) {
-        msg += QStringLiteral(" | No matching line for: ")
-               + notFound.join(QStringLiteral(", "));
-    }
-    *p_message = msg;
-    return true;
-}
-
-}  // namespace prjchoosetool
+    // Make a backup before to
