@@ -95,4 +95,20 @@ private:
     QLabel*      m_pVariantTitle{nullptr};
     QLabel*      m_pStatusLabel{nullptr};
 
-    // Recreated 
+    // Recreated on every reload / selection; owned by their content widgets.
+    QButtonGroup* m_pProjectGroup{nullptr};
+    QButtonGroup* m_pVariantGroup{nullptr};
+
+    // System-tray support for "close hides to background".
+    QSystemTrayIcon* m_pTrayIcon{nullptr};
+    bool             m_forceQuit{false};
+    bool             m_trayHintShown{false};
+
+    // Cached scan results.
+    QMap<QString, ProjectInfo> m_projects;
+    QMap<QString, QString>     m_activeVariants;
+};
+
+}  // namespace prjchoosetool
+
+#endif  // PRJCHOOSETOOL_MAINWINDOW_H

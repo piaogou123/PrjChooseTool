@@ -22,3 +22,6 @@ Makefile.*
 # OS / editor
 .DS_Store
 Thumbs.db
+
+# Local-only icon preview (not part of the build)
+appicon_preview.png

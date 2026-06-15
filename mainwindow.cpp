@@ -577,4 +577,78 @@ bool MainWindow::WriteDefinitions(const QString& datPath,
             ? QStringLiteral("\r\n")
             : QStringLiteral("\n");
 
-    // Make a backup before to
+    // Make a backup before touching the original file.
+    const QString backupPath = datPath + QStringLiteral(".bak");
+    QFile::remove(backupPath);
+    QFile::copy(datPath, backupPath);
+
+    const QStringList lines = content.split(eol);
+    QStringList outLines;
+    outLines.reserve(lines.size());
+
+    QStringList updatedIds;
+    QStringList duplicateIds;
+    QMap<QString, bool> doneIds;
+
+    for (const QString& line : lines) {
+        const int32_t commaPos = static_cast<int32_t>(line.indexOf(','));
+        if (commaPos <= 0) {
+            outLines.append(line);
+            continue;
+        }
+
+        const QString id = line.left(commaPos).trimmed();
+        if (!selections.contains(id)) {
+            outLines.append(line);
+            continue;
+        }
+
+        if (doneIds.value(id, false)) {
+            // A second line with the same id - leave it untouched.
+            if (!duplicateIds.contains(id)) {
+                duplicateIds.append(id);
+            }
+            outLines.append(line);
+            continue;
+        }
+
+        const QString newFolder = selections.value(id);
+        outLines.append(id + QStringLiteral(",") + newFolder);
+        doneIds.insert(id, true);
+        updatedIds.append(id);
+    }
+
+    // Report any selected project that had no matching line.
+    QStringList notFound;
+    for (auto it = selections.constBegin();
+         it != selections.constEnd(); ++it) {
+        if (!doneIds.value(it.key(), false)) {
+            notFound.append(it.key());
+        }
+    }
+
+    QFile outFile(datPath);
+    if (!outFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        *p_message = QStringLiteral("Cannot open for writing: ") + datPath;
+        return false;
+    }
+    outFile.write(outLines.join(eol).toUtf8());
+    outFile.close();
+
+    QString msg =
+        QStringLiteral("Updated %1 line(s). Backup: %2")
+            .arg(updatedIds.size())
+            .arg(QFileInfo(backupPath).fileName());
+    if (!duplicateIds.isEmpty()) {
+        msg += QStringLiteral(" | Duplicate ids left untouched: ")
+               + duplicateIds.join(QStringLiteral(", "));
+    }
+    if (!notFound.isEmpty()) {
+        msg += QStringLiteral(" | No matching line for: ")
+               + notFound.join(QStringLiteral(", "));
+    }
+    *p_message = msg;
+    return true;
+}
+
+}  // namespace prjchoosetool

@@ -21,3 +21,9 @@ SOURCES += \
 
 HEADERS += \
     mainwindow.h
+
+RESOURCES += \
+    app.qrc
+
+# Windows executable icon.
+win32: RC_ICONS = appicon.ico
