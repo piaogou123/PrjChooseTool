@@ -1,0 +1,24 @@
+# Qt / qmake build artifacts
+build/
+build-*/
+debug/
+release/
+*.o
+*.obj
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+Makefile
+Makefile.*
+.qmake.stash
+*.user
+*.exe
+*.dll
+
+# Generated backup of the definition file
+*.bak
+
+# OS / editor
+.DS_Store
+Thumbs.db
