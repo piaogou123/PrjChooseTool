@@ -29,6 +29,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSet>
 #include <QSettings>
 #include <QStatusBar>
 #include <QSystemTrayIcon>
@@ -649,6 +650,17 @@ bool MainWindow::LoadActiveVariants(const QString& datPath,
 
 void MainWindow::PopulateTree()
 {
+    // Remember which project groups are currently expanded so that a Reload
+    // only refreshes the contents and keeps the user's expand/collapse state
+    // (default on first load: all collapsed).
+    QSet<QString> expandedIds;
+    for (int32_t i = 0; i < m_pTree->topLevelItemCount(); ++i) {
+        QTreeWidgetItem* p_existing = m_pTree->topLevelItem(i);
+        if (p_existing != nullptr && p_existing->isExpanded()) {
+            expandedIds.insert(p_existing->text(0));
+        }
+    }
+
     m_pTree->clear();
 
     for (auto it = m_projects.constBegin();
@@ -686,7 +698,8 @@ void MainWindow::PopulateTree()
             p_top->setText(1, Tr(QStringLiteral("missing")));
         }
 
-        p_top->setExpanded(true);
+        // Restore previous expand state; new/unseen projects stay collapsed.
+        p_top->setExpanded(expandedIds.contains(info.projectId));
     }
 }
 
