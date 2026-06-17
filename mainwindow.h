@@ -2,8 +2,8 @@
  * @CopyRight: iNovatrol
  * @Description: Main window that lists Data_User.<ProjectId>.<Variant>
  *               folders grouped by project in a native list. Selecting a
- *               variant and confirming rewrites the matching line in
- *               Data_System/ProjectDefinition.dat
+ *               variant rewrites the matching line in
+ *               Data_System/ProjectDefinition.dat. Supports English / Chinese.
  * @version: <SET-YOUR-INITIALS> <SET-YOUR-VERSION>   // e.g. JCK J01
  * @Author: <SET-YOUR-NAME-IN-PINYIN>
  * @Date: 2026.06.15
@@ -14,6 +14,7 @@
 
 #include <cstdint>
 
+#include <QHash>
 #include <QMainWindow>
 #include <QMap>
 #include <QString>
@@ -26,6 +27,10 @@ class QTreeWidget;
 class QTreeWidgetItem;
 class QWidget;
 class QCloseEvent;
+class QLabel;
+class QPushButton;
+class QMenu;
+class QAction;
 
 namespace prjchoosetool
 {
@@ -57,6 +62,7 @@ private slots:
     void OnCurrentItemChanged(QTreeWidgetItem* p_current,
                               QTreeWidgetItem* p_previous);
     void OnAbout();
+    void OnLanguageSelected(QAction* p_action);
 
     // Tray interactions.
     void OnTrayActivated(QSystemTrayIcon::ActivationReason reason);
@@ -67,6 +73,11 @@ private:
     void    BuildUi();
     void    BuildMenu();
     void    SetupTray();
+
+    // Translation helpers (lightweight, no .ts/.qm needed).
+    void    BuildTranslations();
+    QString Tr(const QString& english) const;
+    void    RetranslateUi();
 
     // Scan baseDir for Data_User.* folders, grouped by project id.
     bool    ScanProjects(const QString& baseDir,
@@ -83,6 +94,9 @@ private:
     // Re-select a variant row by its folder name after a refresh.
     void    SelectVariant(const QString& folder);
 
+    // True if "i-Novatrol <projectId>.exe" is currently running.
+    bool    IsProjectRunning(const QString& projectId) const;
+
     // Rewrite the matching line in ProjectDefinition.dat.
     bool    WriteDefinitions(const QString& datPath,
                              const QMap<QString, QString>& selections,
@@ -94,10 +108,33 @@ private:
     QLineEdit*   m_pBaseDirEdit{nullptr};
     QTreeWidget* m_pTree{nullptr};
 
+    // Retranslatable widgets / actions.
+    QLabel*      m_pDirLabel{nullptr};
+    QPushButton* m_pBrowseButton{nullptr};
+    QPushButton* m_pReloadButton{nullptr};
+    QPushButton* m_pSetButton{nullptr};
+
+    QMenu*   m_pFileMenu{nullptr};
+    QMenu*   m_pActionsMenu{nullptr};
+    QMenu*   m_pHelpMenu{nullptr};
+    QMenu*   m_pLangMenu{nullptr};
+    QAction* m_pReloadAction{nullptr};
+    QAction* m_pExitAction{nullptr};
+    QAction* m_pSetAction{nullptr};
+    QAction* m_pAboutAction{nullptr};
+    QAction* m_pLangEnAction{nullptr};
+    QAction* m_pLangZhAction{nullptr};
+    QAction* m_pTrayShowAction{nullptr};
+    QAction* m_pTrayQuitAction{nullptr};
+
     // System-tray support for "close hides to background".
     QSystemTrayIcon* m_pTrayIcon{nullptr};
     bool             m_forceQuit{false};
     bool             m_trayHintShown{false};
+
+    // Language: 0 = English, 1 = Chinese.
+    int32_t                    m_lang{0};
+    QHash<QString, QString>    m_zh;
 
     // Cached scan results.
     QMap<QString, ProjectInfo> m_projects;

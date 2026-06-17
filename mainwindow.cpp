@@ -11,6 +11,7 @@
 #include <cstdint>
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDir>
@@ -37,6 +38,17 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#ifdef Q_OS_WIN
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#  include <tlhelp32.h>
+#endif
+
 namespace prjchoosetool
 {
 
@@ -50,13 +62,17 @@ const QString FOLDER_PREFIX = QStringLiteral("Data_User.");
 const QString DEFINITION_SUBDIR  = QStringLiteral("Data_System");
 const QString DEFINITION_FILE    = QStringLiteral("ProjectDefinition.dat");
 
-// QSettings key under which the last-used working folder is stored.
-const QString SETTINGS_LAST_DIR =
-    QStringLiteral("workingDir/lastPath");
+// QSettings keys.
+const QString SETTINGS_LAST_DIR = QStringLiteral("workingDir/lastPath");
+const QString SETTINGS_LANG     = QStringLiteral("ui/lang");
 
 // Item data roles for tree rows.
 const int32_t ROLE_FOLDER  = Qt::UserRole;       // full Data_User.* folder
 const int32_t ROLE_PROJECT = Qt::UserRole + 1;   // owning project id
+
+// Language codes.
+const int32_t LANG_EN = 0;
+const int32_t LANG_ZH = 1;
 
 // GeekUninstaller-like flat, native, light theme.
 const char* const APP_STYLE =
@@ -117,9 +133,14 @@ QString ParseProjectId(const QString& folderName)
 MainWindow::MainWindow(QWidget* p_parent)
     : QMainWindow(p_parent)
 {
+    QSettings settings;
+    m_lang = settings.value(SETTINGS_LANG, LANG_EN).toInt();
+
+    BuildTranslations();
     BuildUi();
     BuildMenu();
     SetupTray();
+    RetranslateUi();
     OnReload();
 }
 
@@ -129,9 +150,110 @@ MainWindow::~MainWindow()
     // so no manual cleanup is required here.
 }
 
+void MainWindow::BuildTranslations()
+{
+    auto add = [this](const char* en, const char* zh) {
+        m_zh.insert(QString::fromLatin1(en), QString::fromUtf8(zh));
+    };
+
+    add("Project Chooser", u8"项目选择器");
+    add("Folder:", u8"文件夹:");
+    add("Browse...", u8"浏览...");
+    add("Reload", u8"刷新");
+    add("Set as active", u8"设为启用");
+    add("Language", u8"语言");
+    add("Select your working folder...",
+        u8"请选择工作目录...");
+    add("Project / Variant", u8"项目 / 配置");
+    add("Status", u8"状态");
+    add("Ready", u8"就绪");
+    add("Active", u8"启用中");
+    add("missing", u8"缺失");
+
+    add("&File", u8"文件(&F)");
+    add("&Reload", u8"刷新(&R)");
+    add("E&xit", u8"退出(&X)");
+    add("&Actions", u8"操作(&A)");
+    add("&Set as active", u8"设为启用(&S)");
+    add("&Help", u8"帮助(&H)");
+    add("&About", u8"关于(&A)");
+
+    add("Show window", u8"显示窗口");
+    add("Quit", u8"退出");
+    add("Still running in the tray. Right-click the icon to quit.",
+        u8"已最小化到托盘后台运"
+        u8"行。右键托盘图标可退"
+        u8"出。");
+
+    add("Select a working folder (Browse...).",
+        u8"请选择工作目录(点浏"
+        u8"览...)。");
+    add("Working folder does not exist: ",
+        u8"工作目录不存在: ");
+    add("%1 project(s), %2 variant(s).",
+        u8"%1 个项目，%2 个配置。");
+    add("  ProjectDefinition.dat not found.",
+        u8"  未找到 ProjectDefinition.dat。");
+    add("  Duplicate ids: ", u8"  重复的项目号: ");
+    add("Select a variant under a project.",
+        u8"请在某个项目下选择一"
+        u8"个配置。");
+    add("Target: project %1 -> %2  (click \"Set as active\")",
+        u8"目标: 项目 %1 -> %2  "
+        u8"(点“设为启用”)");
+    add("Select a variant first.",
+        u8"请先选择一个配置。");
+    add("Select a variant row, not a project.",
+        u8"请选择配置行，而不是"
+        u8"项目行。");
+    add("Set %1 -> %2   (%3)",
+        u8"已设置 %1 -> %2   (%3)");
+
+    add("Program is running", u8"程序正在运行");
+    add("\"i-Novatrol %1\" is currently running.\n"
+        "Please close that program before changing project %1.",
+        u8"“i-Novatrol %1” 正在运行。\n"
+        u8"请先关闭该程序，再修"
+        u8"改项目 %1。");
+    add("Cannot change %1: program is running.",
+        u8"无法修改 %1: 程序正在运"
+        u8"行。");
+
+    add("Update failed", u8"修改失败");
+    add("About Project Chooser",
+        u8"关于 项目选择器");
+    add("<b>Project Chooser</b><br>"
+        "Switches the active Data_User variant for a project "
+        "by editing Data_System/ProjectDefinition.dat.<br><br>"
+        "iNovatrol",
+        u8"<b>项目选择器</b><br>"
+        u8"通过编辑 Data_System/ProjectDefinition.dat "
+        u8"切换某个项目当前启用"
+        u8"的 Data_User 配置。<br><br>iNovatrol");
+
+    add("File not found: ", u8"文件不存在: ");
+    add("Cannot open for reading: ",
+        u8"无法读取文件: ");
+    add("Cannot open for writing: ",
+        u8"无法写入文件: ");
+    add("Updated %1 line(s). Backup: %2",
+        u8"已更新 %1 行。备份: %2");
+    add(" | Duplicate ids left untouched: ",
+        u8" | 重复项目号未改动: ");
+    add(" | No matching line for: ",
+        u8" | 未找到对应行: ");
+}
+
+QString MainWindow::Tr(const QString& english) const
+{
+    if (m_lang == LANG_ZH) {
+        return m_zh.value(english, english);
+    }
+    return english;
+}
+
 void MainWindow::BuildUi()
 {
-    setWindowTitle(QStringLiteral("Project Chooser"));
     setWindowIcon(QIcon(QStringLiteral(":/appicon.png")));
     setStyleSheet(QString::fromUtf8(APP_STYLE));
     resize(580, 460);
@@ -143,35 +265,28 @@ void MainWindow::BuildUi()
     p_mainLayout->setContentsMargins(8, 8, 8, 8);
     p_mainLayout->setSpacing(6);
 
-    // --- Top row: working directory + Browse ------------------------
+    // --- Top row: folder + Browse + Reload + Language ---------------
     QHBoxLayout* p_topRow = new QHBoxLayout();
     p_topRow->setSpacing(6);
 
-    QLabel* p_dirLabel = new QLabel(QStringLiteral("Folder:"), p_central);
+    m_pDirLabel = new QLabel(p_central);
 
     QSettings settings;
     const QString savedDir = settings.value(SETTINGS_LAST_DIR).toString();
     m_pBaseDirEdit = new QLineEdit(savedDir, p_central);
-    m_pBaseDirEdit->setPlaceholderText(
-        QStringLiteral("Select your working folder..."));
 
-    QPushButton* p_browseButton =
-        new QPushButton(QStringLiteral("Browse..."), p_central);
-    QPushButton* p_reloadButton =
-        new QPushButton(QStringLiteral("Reload"), p_central);
+    m_pBrowseButton = new QPushButton(p_central);
+    m_pReloadButton = new QPushButton(p_central);
 
-    p_topRow->addWidget(p_dirLabel);
+    p_topRow->addWidget(m_pDirLabel);
     p_topRow->addWidget(m_pBaseDirEdit, 1);
-    p_topRow->addWidget(p_browseButton);
-    p_topRow->addWidget(p_reloadButton);
+    p_topRow->addWidget(m_pBrowseButton);
+    p_topRow->addWidget(m_pReloadButton);
     p_mainLayout->addLayout(p_topRow);
 
     // --- Project / variant tree ------------------------------------
     m_pTree = new QTreeWidget(p_central);
     m_pTree->setColumnCount(2);
-    QStringList headers;
-    headers << QStringLiteral("Project / Variant") << QStringLiteral("Status");
-    m_pTree->setHeaderLabels(headers);
     m_pTree->setRootIsDecorated(true);
     m_pTree->setUniformRowHeights(true);
     m_pTree->setAlternatingRowColors(true);
@@ -186,23 +301,18 @@ void MainWindow::BuildUi()
     QHBoxLayout* p_bottomRow = new QHBoxLayout();
     p_bottomRow->addStretch(1);
 
-    QPushButton* p_setButton =
-        new QPushButton(QStringLiteral("Set as active"), p_central);
-    p_setButton->setDefault(true);
-    p_bottomRow->addWidget(p_setButton);
+    m_pSetButton = new QPushButton(p_central);
+    m_pSetButton->setDefault(true);
+    p_bottomRow->addWidget(m_pSetButton);
     p_mainLayout->addLayout(p_bottomRow);
 
-    statusBar()->showMessage(QStringLiteral("Ready"));
-
-    connect(p_browseButton, &QPushButton::clicked,
+    connect(m_pBrowseButton, &QPushButton::clicked,
             this, &MainWindow::OnBrowse);
-    connect(p_reloadButton, &QPushButton::clicked,
+    connect(m_pReloadButton, &QPushButton::clicked,
             this, &MainWindow::OnReload);
-    connect(p_setButton, &QPushButton::clicked,
+    connect(m_pSetButton, &QPushButton::clicked,
             this, &MainWindow::OnSetActive);
     connect(m_pTree, &QTreeWidget::itemActivated,
-            this, &MainWindow::OnTreeActivated);
-    connect(m_pTree, &QTreeWidget::itemDoubleClicked,
             this, &MainWindow::OnTreeActivated);
     connect(m_pTree, &QTreeWidget::currentItemChanged,
             this, &MainWindow::OnCurrentItemChanged);
@@ -210,26 +320,42 @@ void MainWindow::BuildUi()
 
 void MainWindow::BuildMenu()
 {
-    QMenu* p_fileMenu = menuBar()->addMenu(QStringLiteral("&File"));
-    QAction* p_reloadAction =
-        p_fileMenu->addAction(QStringLiteral("&Reload"));
-    p_reloadAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
-    p_fileMenu->addSeparator();
-    QAction* p_exitAction = p_fileMenu->addAction(QStringLiteral("E&xit"));
+    m_pFileMenu = menuBar()->addMenu(QString());
+    m_pReloadAction = m_pFileMenu->addAction(QString());
+    m_pReloadAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
+    m_pFileMenu->addSeparator();
+    m_pExitAction = m_pFileMenu->addAction(QString());
 
-    QMenu* p_actionsMenu = menuBar()->addMenu(QStringLiteral("&Actions"));
-    QAction* p_setAction =
-        p_actionsMenu->addAction(QStringLiteral("&Set as active"));
-    p_setAction->setShortcut(QKeySequence(QStringLiteral("Return")));
+    m_pActionsMenu = menuBar()->addMenu(QString());
+    m_pSetAction = m_pActionsMenu->addAction(QString());
+    m_pSetAction->setShortcut(QKeySequence(QStringLiteral("Return")));
 
-    QMenu* p_helpMenu = menuBar()->addMenu(QStringLiteral("&Help"));
-    QAction* p_aboutAction =
-        p_helpMenu->addAction(QStringLiteral("&About"));
+    m_pHelpMenu = menuBar()->addMenu(QString());
 
-    connect(p_reloadAction, &QAction::triggered, this, &MainWindow::OnReload);
-    connect(p_exitAction, &QAction::triggered, this, &MainWindow::QuitApp);
-    connect(p_setAction, &QAction::triggered, this, &MainWindow::OnSetActive);
-    connect(p_aboutAction, &QAction::triggered, this, &MainWindow::OnAbout);
+    // Help -> Language -> (English / 中文), exclusive, current is checked.
+    m_pLangMenu = m_pHelpMenu->addMenu(QString());
+    QActionGroup* p_langGroup = new QActionGroup(this);
+    p_langGroup->setExclusive(true);
+
+    m_pLangEnAction = m_pLangMenu->addAction(QStringLiteral("English"));
+    m_pLangEnAction->setCheckable(true);
+    m_pLangEnAction->setData(LANG_EN);
+    p_langGroup->addAction(m_pLangEnAction);
+
+    m_pLangZhAction = m_pLangMenu->addAction(QString::fromUtf8(u8"中文"));
+    m_pLangZhAction->setCheckable(true);
+    m_pLangZhAction->setData(LANG_ZH);
+    p_langGroup->addAction(m_pLangZhAction);
+
+    m_pHelpMenu->addSeparator();
+    m_pAboutAction = m_pHelpMenu->addAction(QString());
+
+    connect(m_pReloadAction, &QAction::triggered, this, &MainWindow::OnReload);
+    connect(m_pExitAction, &QAction::triggered, this, &MainWindow::QuitApp);
+    connect(m_pSetAction, &QAction::triggered, this, &MainWindow::OnSetActive);
+    connect(m_pAboutAction, &QAction::triggered, this, &MainWindow::OnAbout);
+    connect(p_langGroup, &QActionGroup::triggered,
+            this, &MainWindow::OnLanguageSelected);
 }
 
 void MainWindow::SetupTray()
@@ -244,24 +370,76 @@ void MainWindow::SetupTray()
 
     m_pTrayIcon = new QSystemTrayIcon(
         QIcon(QStringLiteral(":/appicon.png")), this);
-    m_pTrayIcon->setToolTip(QStringLiteral("Project Chooser"));
 
     QMenu* p_menu = new QMenu(this);
-    QAction* p_showAction =
-        p_menu->addAction(QStringLiteral("Show window"));
+    m_pTrayShowAction = p_menu->addAction(QString());
     p_menu->addSeparator();
-    QAction* p_quitAction =
-        p_menu->addAction(QStringLiteral("Quit"));
+    m_pTrayQuitAction = p_menu->addAction(QString());
 
     m_pTrayIcon->setContextMenu(p_menu);
     m_pTrayIcon->show();
 
-    connect(p_showAction, &QAction::triggered,
+    connect(m_pTrayShowAction, &QAction::triggered,
             this, &MainWindow::ShowFromTray);
-    connect(p_quitAction, &QAction::triggered,
+    connect(m_pTrayQuitAction, &QAction::triggered,
             this, &MainWindow::QuitApp);
     connect(m_pTrayIcon, &QSystemTrayIcon::activated,
             this, &MainWindow::OnTrayActivated);
+}
+
+void MainWindow::RetranslateUi()
+{
+    setWindowTitle(Tr(QStringLiteral("Project Chooser")));
+    m_pDirLabel->setText(Tr(QStringLiteral("Folder:")));
+    m_pBaseDirEdit->setPlaceholderText(
+        Tr(QStringLiteral("Select your working folder...")));
+    m_pBrowseButton->setText(Tr(QStringLiteral("Browse...")));
+    m_pReloadButton->setText(Tr(QStringLiteral("Reload")));
+    m_pSetButton->setText(Tr(QStringLiteral("Set as active")));
+
+    QStringList headers;
+    headers << Tr(QStringLiteral("Project / Variant"))
+            << Tr(QStringLiteral("Status"));
+    m_pTree->setHeaderLabels(headers);
+
+    m_pFileMenu->setTitle(Tr(QStringLiteral("&File")));
+    m_pActionsMenu->setTitle(Tr(QStringLiteral("&Actions")));
+    m_pHelpMenu->setTitle(Tr(QStringLiteral("&Help")));
+    m_pReloadAction->setText(Tr(QStringLiteral("&Reload")));
+    m_pExitAction->setText(Tr(QStringLiteral("E&xit")));
+    m_pSetAction->setText(Tr(QStringLiteral("&Set as active")));
+    m_pAboutAction->setText(Tr(QStringLiteral("&About")));
+    m_pLangMenu->setTitle(Tr(QStringLiteral("Language")));
+    m_pLangEnAction->setChecked(m_lang == LANG_EN);
+    m_pLangZhAction->setChecked(m_lang == LANG_ZH);
+
+    if (m_pTrayShowAction != nullptr) {
+        m_pTrayShowAction->setText(Tr(QStringLiteral("Show window")));
+    }
+    if (m_pTrayQuitAction != nullptr) {
+        m_pTrayQuitAction->setText(Tr(QStringLiteral("Quit")));
+    }
+    if (m_pTrayIcon != nullptr) {
+        m_pTrayIcon->setToolTip(Tr(QStringLiteral("Project Chooser")));
+    }
+}
+
+void MainWindow::OnLanguageSelected(QAction* p_action)
+{
+    if (p_action == nullptr) {
+        return;
+    }
+    const int32_t lang = p_action->data().toInt();
+    if (lang == m_lang) {
+        return;
+    }
+
+    m_lang = lang;
+    QSettings settings;
+    settings.setValue(SETTINGS_LANG, m_lang);
+
+    RetranslateUi();
+    OnReload();   // refresh tree + status text in the new language
 }
 
 void MainWindow::closeEvent(QCloseEvent* p_event)
@@ -282,9 +460,9 @@ void MainWindow::closeEvent(QCloseEvent* p_event)
 
     if (!m_trayHintShown) {
         m_pTrayIcon->showMessage(
-            QStringLiteral("Project Chooser"),
-            QStringLiteral("Still running in the tray. "
-                           "Right-click the icon to quit."),
+            Tr(QStringLiteral("Project Chooser")),
+            Tr(QStringLiteral("Still running in the tray. "
+                              "Right-click the icon to quit.")),
             QSystemTrayIcon::Information, 3000);
         m_trayHintShown = true;
     }
@@ -314,11 +492,11 @@ void MainWindow::QuitApp()
 void MainWindow::OnAbout()
 {
     QMessageBox::about(
-        this, QStringLiteral("About Project Chooser"),
-        QStringLiteral("<b>Project Chooser</b><br>"
-                       "Switches the active Data_User variant for a project "
-                       "by editing Data_System/ProjectDefinition.dat.<br><br>"
-                       "iNovatrol"));
+        this, Tr(QStringLiteral("About Project Chooser")),
+        Tr(QStringLiteral("<b>Project Chooser</b><br>"
+                          "Switches the active Data_User variant for a project "
+                          "by editing Data_System/ProjectDefinition.dat.<br><br>"
+                          "iNovatrol")));
 }
 
 QString MainWindow::DatFilePath() const
@@ -336,7 +514,7 @@ void MainWindow::SetStatus(const QString& text)
 void MainWindow::OnBrowse()
 {
     const QString chosen = QFileDialog::getExistingDirectory(
-        this, QStringLiteral("Select working folder"),
+        this, Tr(QStringLiteral("Select your working folder...")),
         m_pBaseDirEdit->text().trimmed());
     if (!chosen.isEmpty()) {
         m_pBaseDirEdit->setText(chosen);
@@ -351,12 +529,13 @@ void MainWindow::OnReload()
 
     const QString baseDir = m_pBaseDirEdit->text().trimmed();
     if (baseDir.isEmpty()) {
-        SetStatus(QStringLiteral("Select a working folder (Browse...)."));
+        SetStatus(Tr(QStringLiteral("Select a working folder (Browse...).")));
         PopulateTree();
         return;
     }
     if (!QDir(baseDir).exists()) {
-        SetStatus(QStringLiteral("Working folder does not exist: ") + baseDir);
+        SetStatus(Tr(QStringLiteral("Working folder does not exist: "))
+                  + baseDir);
         PopulateTree();
         return;
     }
@@ -379,14 +558,14 @@ void MainWindow::OnReload()
         variantCount += static_cast<int32_t>(it.value().variantFolders.size());
     }
 
-    QString status = QStringLiteral("%1 project(s), %2 variant(s).")
+    QString status = Tr(QStringLiteral("%1 project(s), %2 variant(s)."))
                          .arg(m_projects.size())
                          .arg(variantCount);
     if (!datOk) {
-        status += QStringLiteral("  ProjectDefinition.dat not found.");
+        status += Tr(QStringLiteral("  ProjectDefinition.dat not found."));
     }
     if (!duplicateIds.isEmpty()) {
-        status += QStringLiteral("  Duplicate ids: ")
+        status += Tr(QStringLiteral("  Duplicate ids: "))
                   + duplicateIds.join(QStringLiteral(", "));
     }
     SetStatus(status);
@@ -494,7 +673,7 @@ void MainWindow::PopulateTree()
             p_child->setData(0, ROLE_PROJECT, info.projectId);
 
             if (folder == activeFolder) {
-                p_child->setText(1, QStringLiteral("Active"));
+                p_child->setText(1, Tr(QStringLiteral("Active")));
                 QFont f = p_child->font(0);
                 f.setBold(true);
                 p_child->setFont(0, f);
@@ -504,7 +683,7 @@ void MainWindow::PopulateTree()
         }
 
         if (!activeFolder.isEmpty() && !activeMatched) {
-            p_top->setText(1, QStringLiteral("missing"));
+            p_top->setText(1, Tr(QStringLiteral("missing")));
         }
 
         p_top->setExpanded(true);
@@ -554,12 +733,12 @@ void MainWindow::OnCurrentItemChanged(QTreeWidgetItem* p_current,
     const QString projectId = p_current->data(0, ROLE_PROJECT).toString();
     if (folder.isEmpty() || projectId.isEmpty()) {
         // A project header is selected, not a variant.
-        SetStatus(QStringLiteral("Select a variant under a project."));
+        SetStatus(Tr(QStringLiteral("Select a variant under a project.")));
         return;
     }
 
-    SetStatus(QStringLiteral("Target: project %1 -> %2  "
-                             "(click \"Set as active\")")
+    SetStatus(Tr(QStringLiteral("Target: project %1 -> %2  "
+                                "(click \"Set as active\")"))
                   .arg(projectId, folder));
 }
 
@@ -567,14 +746,27 @@ void MainWindow::OnSetActive()
 {
     QTreeWidgetItem* p_item = m_pTree->currentItem();
     if (p_item == nullptr) {
-        SetStatus(QStringLiteral("Select a variant first."));
+        SetStatus(Tr(QStringLiteral("Select a variant first.")));
         return;
     }
 
     const QString folder    = p_item->data(0, ROLE_FOLDER).toString();
     const QString projectId = p_item->data(0, ROLE_PROJECT).toString();
     if (folder.isEmpty() || projectId.isEmpty()) {
-        SetStatus(QStringLiteral("Select a variant row, not a project."));
+        SetStatus(Tr(QStringLiteral("Select a variant row, not a project.")));
+        return;
+    }
+
+    // Block editing while that project's program is running.
+    if (IsProjectRunning(projectId)) {
+        QMessageBox::warning(
+            this, Tr(QStringLiteral("Program is running")),
+            Tr(QStringLiteral(
+                   "\"i-Novatrol %1\" is currently running.\n"
+                   "Please close that program before changing project %1."))
+                .arg(projectId));
+        SetStatus(Tr(QStringLiteral("Cannot change %1: program is running."))
+                      .arg(projectId));
         return;
     }
 
@@ -584,7 +776,8 @@ void MainWindow::OnSetActive()
     QString message;
     const bool ok = WriteDefinitions(DatFilePath(), selections, &message);
     if (!ok) {
-        QMessageBox::warning(this, QStringLiteral("Update failed"), message);
+        QMessageBox::warning(
+            this, Tr(QStringLiteral("Update failed")), message);
         SetStatus(message);
         return;
     }
@@ -592,8 +785,50 @@ void MainWindow::OnSetActive()
     // Refresh, then keep the user on the row they just activated.
     OnReload();
     SelectVariant(folder);
-    SetStatus(QStringLiteral("Set %1 -> %2   (%3)")
+    SetStatus(Tr(QStringLiteral("Set %1 -> %2   (%3)"))
                   .arg(projectId, folder, message));
+}
+
+bool MainWindow::IsProjectRunning(const QString& projectId) const
+{
+    if (projectId.isEmpty()) {
+        return false;
+    }
+
+    // The executable is named "i-Novatrol <projectId>.exe". Match the
+    // " <projectId>.exe" tail (leading space + .exe) so that, e.g., F30
+    // never matches F306.
+    const QString needle =
+        QStringLiteral(" %1.exe").arg(projectId).toLower();
+
+#ifdef Q_OS_WIN
+    // In-process snapshot of running processes - fast (milliseconds).
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return false;   // Cannot determine - do not block the user.
+    }
+
+    PROCESSENTRY32W entry;
+    entry.dwSize = sizeof(entry);
+
+    bool found = false;
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            const QString name =
+                QString::fromWCharArray(entry.szExeFile).toLower();
+            if (name.contains(QStringLiteral("novatrol"))
+                && name.contains(needle)) {
+                found = true;
+                break;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+
+    CloseHandle(snapshot);
+    return found;
+#else
+    return false;
+#endif
 }
 
 bool MainWindow::WriteDefinitions(const QString& datPath,
@@ -606,11 +841,11 @@ bool MainWindow::WriteDefinitions(const QString& datPath,
 
     QFile file(datPath);
     if (!file.exists()) {
-        *p_message = QStringLiteral("File not found: ") + datPath;
+        *p_message = Tr(QStringLiteral("File not found: ")) + datPath;
         return false;
     }
     if (!file.open(QIODevice::ReadOnly)) {
-        *p_message = QStringLiteral("Cannot open for reading: ") + datPath;
+        *p_message = Tr(QStringLiteral("Cannot open for reading: ")) + datPath;
         return false;
     }
     const QString content = QString::fromUtf8(file.readAll());
@@ -674,22 +909,22 @@ bool MainWindow::WriteDefinitions(const QString& datPath,
 
     QFile outFile(datPath);
     if (!outFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        *p_message = QStringLiteral("Cannot open for writing: ") + datPath;
+        *p_message = Tr(QStringLiteral("Cannot open for writing: ")) + datPath;
         return false;
     }
     outFile.write(outLines.join(eol).toUtf8());
     outFile.close();
 
     QString msg =
-        QStringLiteral("Updated %1 line(s). Backup: %2")
+        Tr(QStringLiteral("Updated %1 line(s). Backup: %2"))
             .arg(updatedIds.size())
             .arg(QFileInfo(backupPath).fileName());
     if (!duplicateIds.isEmpty()) {
-        msg += QStringLiteral(" | Duplicate ids left untouched: ")
+        msg += Tr(QStringLiteral(" | Duplicate ids left untouched: "))
                + duplicateIds.join(QStringLiteral(", "));
     }
     if (!notFound.isEmpty()) {
-        msg += QStringLiteral(" | No matching line for: ")
+        msg += Tr(QStringLiteral(" | No matching line for: "))
                + notFound.join(QStringLiteral(", "));
     }
     *p_message = msg;

@@ -27,3 +27,8 @@ RESOURCES += \
 
 # Windows executable icon.
 win32: RC_ICONS = appicon.ico
+
+# Source files are UTF-8 (Chinese UI strings). Make both toolchains read them
+# as UTF-8 so the embedded text is decoded correctly.
+win32-g++:  QMAKE_CXXFLAGS += -finput-charset=UTF-8 -fexec-charset=UTF-8
+win32-msvc*: QMAKE_CXXFLAGS += /utf-8
