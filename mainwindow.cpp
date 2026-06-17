@@ -12,23 +12,28 @@
 
 #include <QAction>
 #include <QApplication>
-#include <QButtonGroup>
 #include <QCloseEvent>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFont>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QIcon>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
-#include <QRadioButton>
-#include <QScrollArea>
 #include <QSettings>
+#include <QStatusBar>
 #include <QSystemTrayIcon>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
+#include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -49,10 +54,39 @@ const QString DEFINITION_FILE    = QStringLiteral("ProjectDefinition.dat");
 const QString SETTINGS_LAST_DIR =
     QStringLiteral("workingDir/lastPath");
 
-// Property key used to stash the full folder name on each radio button.
-const char* const FOLDER_PROPERTY  = "folderName";
-// Property key used to stash the project id on each project option.
-const char* const PROJECT_PROPERTY = "projectId";
+// Item data roles for tree rows.
+const int32_t ROLE_FOLDER  = Qt::UserRole;       // full Data_User.* folder
+const int32_t ROLE_PROJECT = Qt::UserRole + 1;   // owning project id
+
+// GeekUninstaller-like flat, native, light theme.
+const char* const APP_STYLE =
+    "QMainWindow, QWidget { background: #FFFFFF; color: #000000;"
+    "  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;"
+    "  font-size: 9pt; }"
+    "QMenuBar { background: #F5F5F5; border-bottom: 1px solid #DCDCDC; }"
+    "QMenuBar::item { padding: 4px 10px; background: transparent; }"
+    "QMenuBar::item:selected { background: #CBE8F6; }"
+    "QMenu { background: #FFFFFF; border: 1px solid #ABADB3; }"
+    "QMenu::item { padding: 4px 24px; }"
+    "QMenu::item:selected { background: #CBE8F6; }"
+    "QLineEdit { border: 1px solid #ABADB3; padding: 2px 4px;"
+    "  background: #FFFFFF; }"
+    "QLineEdit:focus { border: 1px solid #3399FF; }"
+    "QPushButton { border: 1px solid #ABADB3; padding: 3px 12px;"
+    "  background: #F5F5F5; min-height: 18px; }"
+    "QPushButton:hover { background: #E5F1FB; border-color: #3399FF; }"
+    "QPushButton:pressed { background: #CCE4F7; }"
+    "QPushButton:default { border-color: #3399FF; }"
+    "QTreeWidget { border: 1px solid #ABADB3; outline: 0;"
+    "  alternate-background-color: #F7F7F7; }"
+    "QTreeView::item { height: 20px; border: 0px; }"
+    "QTreeView::item:selected { background: #CBE8F6; color: #000000; }"
+    "QTreeView::item:selected:!active { background: #E8E8E8; }"
+    "QHeaderView::section { background: #F5F5F5; padding: 3px 6px;"
+    "  border: 0px; border-right: 1px solid #E2E2E2;"
+    "  border-bottom: 1px solid #DCDCDC; }"
+    "QStatusBar { background: #F5F5F5; border-top: 1px solid #DCDCDC; }"
+    "QStatusBar::item { border: 0px; }";
 
 // Extract the project id from a folder name such as
 // "Data_User.F306.WFiber2" -> "F306". Returns an empty string if the
@@ -84,6 +118,7 @@ MainWindow::MainWindow(QWidget* p_parent)
     : QMainWindow(p_parent)
 {
     BuildUi();
+    BuildMenu();
     SetupTray();
     OnReload();
 }
@@ -92,6 +127,109 @@ MainWindow::~MainWindow()
 {
     // Child widgets and button groups are owned by Qt's parent hierarchy,
     // so no manual cleanup is required here.
+}
+
+void MainWindow::BuildUi()
+{
+    setWindowTitle(QStringLiteral("Project Chooser"));
+    setWindowIcon(QIcon(QStringLiteral(":/appicon.png")));
+    setStyleSheet(QString::fromUtf8(APP_STYLE));
+    resize(580, 460);
+
+    QWidget* p_central = new QWidget(this);
+    setCentralWidget(p_central);
+
+    QVBoxLayout* p_mainLayout = new QVBoxLayout(p_central);
+    p_mainLayout->setContentsMargins(8, 8, 8, 8);
+    p_mainLayout->setSpacing(6);
+
+    // --- Top row: working directory + Browse ------------------------
+    QHBoxLayout* p_topRow = new QHBoxLayout();
+    p_topRow->setSpacing(6);
+
+    QLabel* p_dirLabel = new QLabel(QStringLiteral("Folder:"), p_central);
+
+    QSettings settings;
+    const QString savedDir = settings.value(SETTINGS_LAST_DIR).toString();
+    m_pBaseDirEdit = new QLineEdit(savedDir, p_central);
+    m_pBaseDirEdit->setPlaceholderText(
+        QStringLiteral("Select your working folder..."));
+
+    QPushButton* p_browseButton =
+        new QPushButton(QStringLiteral("Browse..."), p_central);
+    QPushButton* p_reloadButton =
+        new QPushButton(QStringLiteral("Reload"), p_central);
+
+    p_topRow->addWidget(p_dirLabel);
+    p_topRow->addWidget(m_pBaseDirEdit, 1);
+    p_topRow->addWidget(p_browseButton);
+    p_topRow->addWidget(p_reloadButton);
+    p_mainLayout->addLayout(p_topRow);
+
+    // --- Project / variant tree ------------------------------------
+    m_pTree = new QTreeWidget(p_central);
+    m_pTree->setColumnCount(2);
+    QStringList headers;
+    headers << QStringLiteral("Project / Variant") << QStringLiteral("Status");
+    m_pTree->setHeaderLabels(headers);
+    m_pTree->setRootIsDecorated(true);
+    m_pTree->setUniformRowHeights(true);
+    m_pTree->setAlternatingRowColors(true);
+    m_pTree->setAllColumnsShowFocus(true);
+    m_pTree->setExpandsOnDoubleClick(false);
+    m_pTree->header()->setStretchLastSection(false);
+    m_pTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_pTree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    p_mainLayout->addWidget(m_pTree, 1);
+
+    // --- Bottom row: Set-active button -----------------------------
+    QHBoxLayout* p_bottomRow = new QHBoxLayout();
+    p_bottomRow->addStretch(1);
+
+    QPushButton* p_setButton =
+        new QPushButton(QStringLiteral("Set as active"), p_central);
+    p_setButton->setDefault(true);
+    p_bottomRow->addWidget(p_setButton);
+    p_mainLayout->addLayout(p_bottomRow);
+
+    statusBar()->showMessage(QStringLiteral("Ready"));
+
+    connect(p_browseButton, &QPushButton::clicked,
+            this, &MainWindow::OnBrowse);
+    connect(p_reloadButton, &QPushButton::clicked,
+            this, &MainWindow::OnReload);
+    connect(p_setButton, &QPushButton::clicked,
+            this, &MainWindow::OnSetActive);
+    connect(m_pTree, &QTreeWidget::itemActivated,
+            this, &MainWindow::OnTreeActivated);
+    connect(m_pTree, &QTreeWidget::itemDoubleClicked,
+            this, &MainWindow::OnTreeActivated);
+    connect(m_pTree, &QTreeWidget::currentItemChanged,
+            this, &MainWindow::OnCurrentItemChanged);
+}
+
+void MainWindow::BuildMenu()
+{
+    QMenu* p_fileMenu = menuBar()->addMenu(QStringLiteral("&File"));
+    QAction* p_reloadAction =
+        p_fileMenu->addAction(QStringLiteral("&Reload"));
+    p_reloadAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
+    p_fileMenu->addSeparator();
+    QAction* p_exitAction = p_fileMenu->addAction(QStringLiteral("E&xit"));
+
+    QMenu* p_actionsMenu = menuBar()->addMenu(QStringLiteral("&Actions"));
+    QAction* p_setAction =
+        p_actionsMenu->addAction(QStringLiteral("&Set as active"));
+    p_setAction->setShortcut(QKeySequence(QStringLiteral("Return")));
+
+    QMenu* p_helpMenu = menuBar()->addMenu(QStringLiteral("&Help"));
+    QAction* p_aboutAction =
+        p_helpMenu->addAction(QStringLiteral("&About"));
+
+    connect(p_reloadAction, &QAction::triggered, this, &MainWindow::OnReload);
+    connect(p_exitAction, &QAction::triggered, this, &MainWindow::QuitApp);
+    connect(p_setAction, &QAction::triggered, this, &MainWindow::OnSetActive);
+    connect(p_aboutAction, &QAction::triggered, this, &MainWindow::OnAbout);
 }
 
 void MainWindow::SetupTray()
@@ -173,82 +311,14 @@ void MainWindow::QuitApp()
     QApplication::quit();
 }
 
-void MainWindow::BuildUi()
+void MainWindow::OnAbout()
 {
-    setWindowTitle(QStringLiteral("Project Chooser - ProjectDefinition.dat"));
-    setWindowIcon(QIcon(QStringLiteral(":/appicon.png")));
-    resize(560, 520);
-
-    QWidget* p_central = new QWidget(this);
-    setCentralWidget(p_central);
-
-    QVBoxLayout* p_mainLayout = new QVBoxLayout(p_central);
-
-    // --- Top row: working directory + Browse + Reload ---------------
-    QHBoxLayout* p_topRow = new QHBoxLayout();
-
-    QLabel* p_dirLabel = new QLabel(QStringLiteral("Working folder:"),
-                                    p_central);
-
-    // First launch: empty. Otherwise reuse the last folder the user picked.
-    QSettings settings;
-    const QString savedDir = settings.value(SETTINGS_LAST_DIR).toString();
-    m_pBaseDirEdit = new QLineEdit(savedDir, p_central);
-    m_pBaseDirEdit->setPlaceholderText(
-        QStringLiteral("Select your working folder..."));
-
-    QPushButton* p_browseButton =
-        new QPushButton(QStringLiteral("Browse..."), p_central);
-    QPushButton* p_reloadButton =
-        new QPushButton(QStringLiteral("Reload"), p_central);
-
-    p_topRow->addWidget(p_dirLabel);
-    p_topRow->addWidget(m_pBaseDirEdit, 1);
-    p_topRow->addWidget(p_browseButton);
-    p_topRow->addWidget(p_reloadButton);
-
-    p_mainLayout->addLayout(p_topRow);
-
-    // --- Horizontal project selector -------------------------------
-    QLabel* p_projectLabel = new QLabel(QStringLiteral("Project:"),
-                                        p_central);
-    p_mainLayout->addWidget(p_projectLabel);
-
-    m_pProjectScroll = new QScrollArea(p_central);
-    m_pProjectScroll->setWidgetResizable(true);
-    m_pProjectScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_pProjectScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    m_pProjectScroll->setFixedHeight(56);
-    p_mainLayout->addWidget(m_pProjectScroll);
-
-    // --- Variant list of the chosen project ------------------------
-    m_pVariantTitle = new QLabel(QStringLiteral("Variants:"), p_central);
-    p_mainLayout->addWidget(m_pVariantTitle);
-
-    m_pVariantScroll = new QScrollArea(p_central);
-    m_pVariantScroll->setWidgetResizable(true);
-    p_mainLayout->addWidget(m_pVariantScroll, 1);
-
-    // --- Bottom row: status label + Apply --------------------------
-    QHBoxLayout* p_bottomRow = new QHBoxLayout();
-
-    m_pStatusLabel = new QLabel(QString(), p_central);
-    m_pStatusLabel->setWordWrap(true);
-
-    QPushButton* p_applyButton =
-        new QPushButton(QStringLiteral("Apply selection"), p_central);
-
-    p_bottomRow->addWidget(m_pStatusLabel, 1);
-    p_bottomRow->addWidget(p_applyButton);
-
-    p_mainLayout->addLayout(p_bottomRow);
-
-    connect(p_browseButton, &QPushButton::clicked,
-            this, &MainWindow::OnBrowse);
-    connect(p_reloadButton, &QPushButton::clicked,
-            this, &MainWindow::OnReload);
-    connect(p_applyButton, &QPushButton::clicked,
-            this, &MainWindow::OnApply);
+    QMessageBox::about(
+        this, QStringLiteral("About Project Chooser"),
+        QStringLiteral("<b>Project Chooser</b><br>"
+                       "Switches the active Data_User variant for a project "
+                       "by editing Data_System/ProjectDefinition.dat.<br><br>"
+                       "iNovatrol"));
 }
 
 QString MainWindow::DatFilePath() const
@@ -260,9 +330,7 @@ QString MainWindow::DatFilePath() const
 
 void MainWindow::SetStatus(const QString& text)
 {
-    if (m_pStatusLabel != nullptr) {
-        m_pStatusLabel->setText(text);
-    }
+    statusBar()->showMessage(text);
 }
 
 void MainWindow::OnBrowse()
@@ -283,16 +351,13 @@ void MainWindow::OnReload()
 
     const QString baseDir = m_pBaseDirEdit->text().trimmed();
     if (baseDir.isEmpty()) {
-        SetStatus(QStringLiteral(
-            "Please select a working folder (Browse...)."));
-        PopulateProjectBar();
-        PopulateVariantPanel(QString());
+        SetStatus(QStringLiteral("Select a working folder (Browse...)."));
+        PopulateTree();
         return;
     }
     if (!QDir(baseDir).exists()) {
         SetStatus(QStringLiteral("Working folder does not exist: ") + baseDir);
-        PopulateProjectBar();
-        PopulateVariantPanel(QString());
+        PopulateTree();
         return;
     }
 
@@ -306,17 +371,22 @@ void MainWindow::OnReload()
     const bool datOk =
         LoadActiveVariants(DatFilePath(), &m_activeVariants, &duplicateIds);
 
-    PopulateProjectBar();
-    PopulateVariantPanel(QString());   // nothing chosen yet
+    PopulateTree();
 
-    QString status =
-        QStringLiteral("Found %1 project(s).").arg(m_projects.size());
+    int32_t variantCount = 0;
+    for (auto it = m_projects.constBegin();
+         it != m_projects.constEnd(); ++it) {
+        variantCount += static_cast<int32_t>(it.value().variantFolders.size());
+    }
+
+    QString status = QStringLiteral("%1 project(s), %2 variant(s).")
+                         .arg(m_projects.size())
+                         .arg(variantCount);
     if (!datOk) {
-        status += QStringLiteral(" (ProjectDefinition.dat not found at ")
-                  + DatFilePath() + QStringLiteral(")");
+        status += QStringLiteral("  ProjectDefinition.dat not found.");
     }
     if (!duplicateIds.isEmpty()) {
-        status += QStringLiteral(" Duplicate ids in .dat: ")
+        status += QStringLiteral("  Duplicate ids: ")
                   + duplicateIds.join(QStringLiteral(", "));
     }
     SetStatus(status);
@@ -398,126 +468,113 @@ bool MainWindow::LoadActiveVariants(const QString& datPath,
     return true;
 }
 
-void MainWindow::PopulateProjectBar()
+void MainWindow::PopulateTree()
 {
-    // Replacing the content widget deletes the previous project options
-    // and their button group.
-    QWidget* p_bar = new QWidget();
-    QHBoxLayout* p_barLayout = new QHBoxLayout(p_bar);
-    p_barLayout->setContentsMargins(4, 4, 4, 4);
-
-    m_pProjectGroup = new QButtonGroup(p_bar);
-    m_pProjectGroup->setExclusive(true);
+    m_pTree->clear();
 
     for (auto it = m_projects.constBegin();
          it != m_projects.constEnd(); ++it) {
-        const QString& projectId = it.key();
+        const ProjectInfo& info = it.value();
 
-        QRadioButton* p_option = new QRadioButton(projectId, p_bar);
-        p_option->setProperty(PROJECT_PROPERTY, projectId);
-        m_pProjectGroup->addButton(p_option);
-        p_barLayout->addWidget(p_option);
+        QTreeWidgetItem* p_top = new QTreeWidgetItem(m_pTree);
+        p_top->setText(0, info.projectId);
+        // Group rows are headers, not selectable targets.
+        p_top->setFlags(Qt::ItemIsEnabled);
+        QFont topFont = p_top->font(0);
+        topFont.setBold(true);
+        p_top->setFont(0, topFont);
 
-        connect(p_option, &QRadioButton::toggled,
-                this, &MainWindow::OnProjectSelected);
-    }
+        const QString activeFolder = m_activeVariants.value(info.projectId);
+        bool activeMatched = false;
 
-    p_barLayout->addStretch(1);
-    m_pProjectScroll->setWidget(p_bar);
-}
+        for (const QString& folder : info.variantFolders) {
+            QTreeWidgetItem* p_child = new QTreeWidgetItem(p_top);
+            p_child->setText(0, folder);
+            p_child->setData(0, ROLE_FOLDER, folder);
+            p_child->setData(0, ROLE_PROJECT, info.projectId);
 
-void MainWindow::OnProjectSelected()
-{
-    if (m_pProjectGroup == nullptr) {
-        return;
-    }
-    const QAbstractButton* p_checked = m_pProjectGroup->checkedButton();
-    if (p_checked == nullptr) {
-        return;
-    }
-    const QString projectId =
-        p_checked->property(PROJECT_PROPERTY).toString();
-    PopulateVariantPanel(projectId);
-}
-
-void MainWindow::PopulateVariantPanel(const QString& projectId)
-{
-    // Fresh content widget; the old variant group is deleted with it.
-    QWidget* p_panel = new QWidget();
-    QVBoxLayout* p_panelLayout = new QVBoxLayout(p_panel);
-
-    if (projectId.isEmpty()) {
-        m_pVariantTitle->setText(
-            QStringLiteral("Variants: (select a project above)"));
-        m_pVariantGroup = nullptr;
-        p_panelLayout->addStretch(1);
-        m_pVariantScroll->setWidget(p_panel);
-        return;
-    }
-
-    m_pVariantTitle->setText(
-        QStringLiteral("Variants of %1:").arg(projectId));
-
-    m_pVariantGroup = new QButtonGroup(p_panel);
-    m_pVariantGroup->setExclusive(true);
-
-    const ProjectInfo info = m_projects.value(projectId);
-    const QString activeFolder = m_activeVariants.value(projectId);
-    bool activeMatched = false;
-
-    for (const QString& folder : info.variantFolders) {
-        QRadioButton* p_radio = new QRadioButton(folder, p_panel);
-        p_radio->setProperty(FOLDER_PROPERTY, folder);
-        m_pVariantGroup->addButton(p_radio);
-        p_panelLayout->addWidget(p_radio);
-
-        if (folder == activeFolder) {
-            p_radio->setChecked(true);
-            activeMatched = true;
+            if (folder == activeFolder) {
+                p_child->setText(1, QStringLiteral("Active"));
+                QFont f = p_child->font(0);
+                f.setBold(true);
+                p_child->setFont(0, f);
+                p_child->setFont(1, f);
+                activeMatched = true;
+            }
         }
-    }
 
-    if (!activeFolder.isEmpty() && !activeMatched) {
-        QLabel* p_note = new QLabel(
-            QStringLiteral("Current .dat value not found on disk: ")
-            + activeFolder,
-            p_panel);
-        p_note->setWordWrap(true);
-        p_panelLayout->addWidget(p_note);
-    }
+        if (!activeFolder.isEmpty() && !activeMatched) {
+            p_top->setText(1, QStringLiteral("missing"));
+        }
 
-    p_panelLayout->addStretch(1);
-    m_pVariantScroll->setWidget(p_panel);
+        p_top->setExpanded(true);
+    }
 }
 
-void MainWindow::OnApply()
+void MainWindow::SelectVariant(const QString& folder)
 {
-    if (m_pProjectGroup == nullptr || m_projects.isEmpty()) {
-        SetStatus(QStringLiteral("Nothing to apply - no projects loaded."));
-        return;
-    }
-
-    const QAbstractButton* p_project = m_pProjectGroup->checkedButton();
-    if (p_project == nullptr) {
-        SetStatus(QStringLiteral("Select a project before applying."));
-        return;
-    }
-    const QString projectId =
-        p_project->property(PROJECT_PROPERTY).toString();
-
-    if (m_pVariantGroup == nullptr) {
-        SetStatus(QStringLiteral("Select a variant before applying."));
-        return;
-    }
-    const QAbstractButton* p_variant = m_pVariantGroup->checkedButton();
-    if (p_variant == nullptr) {
-        SetStatus(QStringLiteral("Select a variant for project ")
-                  + projectId + QStringLiteral(" before applying."));
-        return;
-    }
-    const QString folder = p_variant->property(FOLDER_PROPERTY).toString();
     if (folder.isEmpty()) {
-        SetStatus(QStringLiteral("Selected variant is invalid."));
+        return;
+    }
+
+    QTreeWidgetItemIterator it(m_pTree);
+    while (*it != nullptr) {
+        QTreeWidgetItem* p_item = *it;
+        if (p_item->data(0, ROLE_FOLDER).toString() == folder) {
+            m_pTree->setCurrentItem(p_item);
+            m_pTree->scrollToItem(p_item);
+            break;
+        }
+        ++it;
+    }
+}
+
+void MainWindow::OnTreeActivated(QTreeWidgetItem* p_item, int column)
+{
+    Q_UNUSED(column);
+    if (p_item == nullptr) {
+        return;
+    }
+    // Only variant rows carry a folder; ignore group headers.
+    if (p_item->data(0, ROLE_FOLDER).toString().isEmpty()) {
+        return;
+    }
+    OnSetActive();
+}
+
+void MainWindow::OnCurrentItemChanged(QTreeWidgetItem* p_current,
+                                      QTreeWidgetItem* p_previous)
+{
+    Q_UNUSED(p_previous);
+    if (p_current == nullptr) {
+        return;
+    }
+
+    const QString folder    = p_current->data(0, ROLE_FOLDER).toString();
+    const QString projectId = p_current->data(0, ROLE_PROJECT).toString();
+    if (folder.isEmpty() || projectId.isEmpty()) {
+        // A project header is selected, not a variant.
+        SetStatus(QStringLiteral("Select a variant under a project."));
+        return;
+    }
+
+    SetStatus(QStringLiteral("Target: project %1 -> %2  "
+                             "(click \"Set as active\")")
+                  .arg(projectId, folder));
+}
+
+void MainWindow::OnSetActive()
+{
+    QTreeWidgetItem* p_item = m_pTree->currentItem();
+    if (p_item == nullptr) {
+        SetStatus(QStringLiteral("Select a variant first."));
+        return;
+    }
+
+    const QString folder    = p_item->data(0, ROLE_FOLDER).toString();
+    const QString projectId = p_item->data(0, ROLE_PROJECT).toString();
+    if (folder.isEmpty() || projectId.isEmpty()) {
+        SetStatus(QStringLiteral("Select a variant row, not a project."));
         return;
     }
 
@@ -526,29 +583,17 @@ void MainWindow::OnApply()
 
     QString message;
     const bool ok = WriteDefinitions(DatFilePath(), selections, &message);
-
-    if (ok) {
-        QMessageBox::information(
-            this, QStringLiteral("ProjectDefinition.dat updated"), message);
-    } else {
+    if (!ok) {
         QMessageBox::warning(this, QStringLiteral("Update failed"), message);
+        SetStatus(message);
+        return;
     }
-    SetStatus(message);
 
-    // Reload so the displayed state matches the freshly written file, then
-    // restore the project the user was working on.
+    // Refresh, then keep the user on the row they just activated.
     OnReload();
-    if (m_pProjectGroup != nullptr) {
-        const QList<QAbstractButton*> buttons = m_pProjectGroup->buttons();
-        for (QAbstractButton* p_button : buttons) {
-            if (p_button != nullptr
-                && p_button->property(PROJECT_PROPERTY).toString()
-                       == projectId) {
-                p_button->setChecked(true);
-                break;
-            }
-        }
-    }
+    SelectVariant(folder);
+    SetStatus(QStringLiteral("Set %1 -> %2   (%3)")
+                  .arg(projectId, folder, message));
 }
 
 bool MainWindow::WriteDefinitions(const QString& datPath,

@@ -1,9 +1,9 @@
 /*
  * @CopyRight: iNovatrol
  * @Description: Main window that lists Data_User.<ProjectId>.<Variant>
- *               folders. A horizontal project selector picks one project;
- *               its variants are shown below and the chosen one is written
- *               into the matching line of Data_System/ProjectDefinition.dat
+ *               folders grouped by project in a native list. Selecting a
+ *               variant and confirming rewrites the matching line in
+ *               Data_System/ProjectDefinition.dat
  * @version: <SET-YOUR-INITIALS> <SET-YOUR-VERSION>   // e.g. JCK J01
  * @Author: <SET-YOUR-NAME-IN-PINYIN>
  * @Date: 2026.06.15
@@ -22,9 +22,8 @@
 
 // Forward declarations (HD-5: prefer forward-decl over include).
 class QLineEdit;
-class QScrollArea;
-class QLabel;
-class QButtonGroup;
+class QTreeWidget;
+class QTreeWidgetItem;
 class QWidget;
 class QCloseEvent;
 
@@ -53,9 +52,11 @@ protected:
 private slots:
     void OnBrowse();
     void OnReload();
-    void OnApply();
-    // A horizontal project option was picked -> show its variants.
-    void OnProjectSelected();
+    void OnSetActive();
+    void OnTreeActivated(QTreeWidgetItem* p_item, int column);
+    void OnCurrentItemChanged(QTreeWidgetItem* p_current,
+                              QTreeWidgetItem* p_previous);
+    void OnAbout();
 
     // Tray interactions.
     void OnTrayActivated(QSystemTrayIcon::ActivationReason reason);
@@ -64,6 +65,7 @@ private slots:
 
 private:
     void    BuildUi();
+    void    BuildMenu();
     void    SetupTray();
 
     // Scan baseDir for Data_User.* folders, grouped by project id.
@@ -75,11 +77,11 @@ private:
                                QMap<QString, QString>* p_active,
                                QStringList* p_duplicateIds) const;
 
-    // Rebuild the horizontal row of project options.
-    void    PopulateProjectBar();
+    // Rebuild the grouped project / variant tree.
+    void    PopulateTree();
 
-    // Rebuild the variant list for one project (empty id clears it).
-    void    PopulateVariantPanel(const QString& projectId);
+    // Re-select a variant row by its folder name after a refresh.
+    void    SelectVariant(const QString& folder);
 
     // Rewrite the matching line in ProjectDefinition.dat.
     bool    WriteDefinitions(const QString& datPath,
@@ -90,14 +92,7 @@ private:
     void    SetStatus(const QString& text);
 
     QLineEdit*   m_pBaseDirEdit{nullptr};
-    QScrollArea* m_pProjectScroll{nullptr};   // horizontal project options
-    QScrollArea* m_pVariantScroll{nullptr};   // variants of chosen project
-    QLabel*      m_pVariantTitle{nullptr};
-    QLabel*      m_pStatusLabel{nullptr};
-
-    // Recreated on every reload / selection; owned by their content widgets.
-    QButtonGroup* m_pProjectGroup{nullptr};
-    QButtonGroup* m_pVariantGroup{nullptr};
+    QTreeWidget* m_pTree{nullptr};
 
     // System-tray support for "close hides to background".
     QSystemTrayIcon* m_pTrayIcon{nullptr};
