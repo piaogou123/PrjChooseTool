@@ -13,7 +13,10 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QCheckBox>
 #include <QCloseEvent>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
@@ -64,8 +67,13 @@ const QString DEFINITION_SUBDIR  = QStringLiteral("Data_System");
 const QString DEFINITION_FILE    = QStringLiteral("ProjectDefinition.dat");
 
 // QSettings keys.
-const QString SETTINGS_LAST_DIR = QStringLiteral("workingDir/lastPath");
-const QString SETTINGS_LANG     = QStringLiteral("ui/lang");
+const QString SETTINGS_LAST_DIR     = QStringLiteral("workingDir/lastPath");
+const QString SETTINGS_LANG         = QStringLiteral("ui/lang");
+const QString SETTINGS_LIC_ENABLED  = QStringLiteral("license/enabled");
+const QString SETTINGS_LIC_KEYPREF  = QStringLiteral("license/key/");
+
+// Sub-path of the license file inside a variant folder.
+const QString LICENSE_SUBPATH = QStringLiteral("Settings/license");
 
 // Item data roles for tree rows.
 const int32_t ROLE_FOLDER  = Qt::UserRole;       // full Data_User.* folder
@@ -136,13 +144,17 @@ MainWindow::MainWindow(QWidget* p_parent)
 {
     QSettings settings;
     m_lang = settings.value(SETTINGS_LANG, LANG_EN).toInt();
+    m_licenseProjects = settings.value(SETTINGS_LIC_ENABLED).toStringList();
+    m_licenseProjects.sort();
 
     BuildTranslations();
     BuildUi();
     BuildMenu();
     SetupTray();
     RetranslateUi();
+    BuildLicenseRows();
     OnReload();
+    RunAllLicenseChecks();   // first-launch verification
 }
 
 MainWindow::~MainWindow()
@@ -243,6 +255,23 @@ void MainWindow::BuildTranslations()
         u8" | 重复项目号未改动: ");
     add(" | No matching line for: ",
         u8" | 未找到对应行: ");
+
+    add("License settings...", u8"License 设置...");
+    add("License check settings", u8"License 校验设置");
+    add("Select the projects that require a license check:",
+        u8"勾选需要 license 校验的项目:");
+    add("(No projects found. Reload a folder first.)",
+        u8"(没有项目。请先加载一"
+        u8"个目录。)");
+    add("License mismatch", u8"License 不一致");
+    add("Project %1 license does not match the entered key.\n"
+        "Write the current key to:\n%2 ?",
+        u8"项目 %1 的 license 与输入"
+        u8"的密钥不一致。\n"
+        u8"是否将当前密钥写入到:\n%2 ？");
+    add("License written for %1.", u8"已写入 %1 的 license。");
+    add("Failed to write license: %1",
+        u8"写入 license 失败: %1");
 }
 
 QString MainWindow::Tr(const QString& english) const
@@ -284,6 +313,13 @@ void MainWindow::BuildUi()
     p_topRow->addWidget(m_pBrowseButton);
     p_topRow->addWidget(m_pReloadButton);
     p_mainLayout->addLayout(p_topRow);
+
+    // --- License inputs (one row per enabled project) --------------
+    m_pLicenseContainer = new QWidget(p_central);
+    m_pLicenseLayout = new QVBoxLayout(m_pLicenseContainer);
+    m_pLicenseLayout->setContentsMargins(0, 0, 0, 0);
+    m_pLicenseLayout->setSpacing(4);
+    p_mainLayout->addWidget(m_pLicenseContainer);
 
     // --- Project / variant tree ------------------------------------
     m_pTree = new QTreeWidget(p_central);
@@ -349,12 +385,16 @@ void MainWindow::BuildMenu()
     p_langGroup->addAction(m_pLangZhAction);
 
     m_pHelpMenu->addSeparator();
+    m_pLicenseSettingsAction = m_pHelpMenu->addAction(QString());
+    m_pHelpMenu->addSeparator();
     m_pAboutAction = m_pHelpMenu->addAction(QString());
 
     connect(m_pReloadAction, &QAction::triggered, this, &MainWindow::OnReload);
     connect(m_pExitAction, &QAction::triggered, this, &MainWindow::QuitApp);
     connect(m_pSetAction, &QAction::triggered, this, &MainWindow::OnSetActive);
     connect(m_pAboutAction, &QAction::triggered, this, &MainWindow::OnAbout);
+    connect(m_pLicenseSettingsAction, &QAction::triggered,
+            this, &MainWindow::OnLicenseSettings);
     connect(p_langGroup, &QActionGroup::triggered,
             this, &MainWindow::OnLanguageSelected);
 }
@@ -413,6 +453,8 @@ void MainWindow::RetranslateUi()
     m_pLangMenu->setTitle(Tr(QStringLiteral("Language")));
     m_pLangEnAction->setChecked(m_lang == LANG_EN);
     m_pLangZhAction->setChecked(m_lang == LANG_ZH);
+    m_pLicenseSettingsAction->setText(
+        Tr(QStringLiteral("License settings...")));
 
     if (m_pTrayShowAction != nullptr) {
         m_pTrayShowAction->setText(Tr(QStringLiteral("Show window")));
@@ -441,6 +483,186 @@ void MainWindow::OnLanguageSelected(QAction* p_action)
 
     RetranslateUi();
     OnReload();   // refresh tree + status text in the new language
+}
+
+void MainWindow::BuildLicenseRows()
+{
+    m_licenseEdits.clear();
+
+    // Remove any existing rows.
+    QLayoutItem* p_item = nullptr;
+    while ((p_item = m_pLicenseLayout->takeAt(0)) != nullptr) {
+        if (p_item->widget() != nullptr) {
+            p_item->widget()->deleteLater();
+        }
+        delete p_item;
+    }
+
+    QSettings settings;
+    for (const QString& projectId : m_licenseProjects) {
+        QWidget* p_row = new QWidget(m_pLicenseContainer);
+        QHBoxLayout* p_rowLayout = new QHBoxLayout(p_row);
+        p_rowLayout->setContentsMargins(0, 0, 0, 0);
+        p_rowLayout->setSpacing(6);
+
+        QLabel* p_label =
+            new QLabel(QStringLiteral("License %1:").arg(projectId), p_row);
+        QLineEdit* p_edit = new QLineEdit(p_row);
+        p_edit->setProperty("projectId", projectId);
+        p_edit->setEchoMode(QLineEdit::Password);   // mask the key
+        p_edit->setText(
+            settings.value(SETTINGS_LIC_KEYPREF + projectId).toString());
+
+        p_rowLayout->addWidget(p_label);
+        p_rowLayout->addWidget(p_edit, 1);
+        m_pLicenseLayout->addWidget(p_row);
+        m_licenseEdits.insert(projectId, p_edit);
+
+        connect(p_edit, &QLineEdit::editingFinished,
+                this, &MainWindow::OnLicenseKeyEdited);
+    }
+
+    m_pLicenseContainer->setVisible(!m_licenseProjects.isEmpty());
+}
+
+void MainWindow::OnLicenseKeyEdited()
+{
+    QLineEdit* p_edit = qobject_cast<QLineEdit*>(sender());
+    if (p_edit == nullptr) {
+        return;
+    }
+    const QString projectId = p_edit->property("projectId").toString();
+    if (projectId.isEmpty()) {
+        return;
+    }
+    QSettings settings;
+    settings.setValue(SETTINGS_LIC_KEYPREF + projectId,
+                      p_edit->text().trimmed());
+}
+
+QString MainWindow::LicenseFilePath(const QString& projectId) const
+{
+    const QString activeFolder = m_activeVariants.value(projectId);
+    if (activeFolder.isEmpty()) {
+        return QString();
+    }
+    const QString baseDir = m_pBaseDirEdit->text().trimmed();
+    return QDir(baseDir).filePath(activeFolder + "/" + LICENSE_SUBPATH);
+}
+
+void MainWindow::RunLicenseCheck(const QString& projectId)
+{
+    QLineEdit* p_edit = m_licenseEdits.value(projectId, nullptr);
+    if (p_edit == nullptr) {
+        return;
+    }
+    const QString key = p_edit->text().trimmed();
+    if (key.isEmpty()) {
+        return;   // nothing entered to compare against
+    }
+
+    const QString path = LicenseFilePath(projectId);
+    if (path.isEmpty()) {
+        return;   // no active variant for this project
+    }
+
+    QFile file(path);
+    if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
+        return;   // Settings/license missing -> skip (per requirement)
+    }
+    const QString current = QString::fromUtf8(file.readAll()).trimmed();
+    file.close();
+
+    if (current == key) {
+        return;   // already matches
+    }
+
+    const QMessageBox::StandardButton answer = QMessageBox::question(
+        this, Tr(QStringLiteral("License mismatch")),
+        Tr(QStringLiteral(
+               "Project %1 license does not match the entered key.\n"
+               "Write the current key to:\n%2 ?"))
+            .arg(projectId, QDir::toNativeSeparators(path)),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    QFile outFile(path);
+    if (!outFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        SetStatus(Tr(QStringLiteral("Failed to write license: %1")).arg(path));
+        return;
+    }
+    outFile.write(key.toUtf8());
+    outFile.close();
+    SetStatus(Tr(QStringLiteral("License written for %1.")).arg(projectId));
+}
+
+void MainWindow::RunAllLicenseChecks()
+{
+    for (const QString& projectId : m_licenseProjects) {
+        RunLicenseCheck(projectId);
+    }
+}
+
+void MainWindow::OnLicenseSettings()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(Tr(QStringLiteral("License check settings")));
+
+    QVBoxLayout* p_layout = new QVBoxLayout(&dialog);
+    p_layout->addWidget(new QLabel(
+        Tr(QStringLiteral(
+            "Select the projects that require a license check:")),
+        &dialog));
+
+    // Union of discovered projects and already-enabled ones.
+    QStringList ids = m_projects.keys();
+    for (const QString& enabled : m_licenseProjects) {
+        if (!ids.contains(enabled)) {
+            ids.append(enabled);
+        }
+    }
+    ids.sort();
+
+    QList<QCheckBox*> boxes;
+    if (ids.isEmpty()) {
+        p_layout->addWidget(new QLabel(
+            Tr(QStringLiteral(
+                "(No projects found. Reload a folder first.)")),
+            &dialog));
+    } else {
+        for (const QString& id : ids) {
+            QCheckBox* p_box = new QCheckBox(id, &dialog);
+            p_box->setChecked(m_licenseProjects.contains(id));
+            p_layout->addWidget(p_box);
+            boxes.append(p_box);
+        }
+    }
+
+    QDialogButtonBox* p_buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    p_layout->addWidget(p_buttons);
+    connect(p_buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(p_buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    QStringList selected;
+    for (QCheckBox* p_box : boxes) {
+        if (p_box->isChecked()) {
+            selected.append(p_box->text());
+        }
+    }
+    selected.sort();
+
+    m_licenseProjects = selected;
+    QSettings settings;
+    settings.setValue(SETTINGS_LIC_ENABLED, m_licenseProjects);
+
+    BuildLicenseRows();
 }
 
 void MainWindow::closeEvent(QCloseEvent* p_event)
@@ -800,6 +1022,11 @@ void MainWindow::OnSetActive()
     SelectVariant(folder);
     SetStatus(Tr(QStringLiteral("Set %1 -> %2   (%3)"))
                   .arg(projectId, folder, message));
+
+    // Verify the license of the project we just switched.
+    if (m_licenseProjects.contains(projectId)) {
+        RunLicenseCheck(projectId);
+    }
 }
 
 bool MainWindow::IsProjectRunning(const QString& projectId) const

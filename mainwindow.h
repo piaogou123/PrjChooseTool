@@ -31,6 +31,7 @@ class QLabel;
 class QPushButton;
 class QMenu;
 class QAction;
+class QVBoxLayout;
 
 namespace prjchoosetool
 {
@@ -63,6 +64,8 @@ private slots:
                               QTreeWidgetItem* p_previous);
     void OnAbout();
     void OnLanguageSelected(QAction* p_action);
+    void OnLicenseSettings();
+    void OnLicenseKeyEdited();
 
     // Tray interactions.
     void OnTrayActivated(QSystemTrayIcon::ActivationReason reason);
@@ -78,6 +81,12 @@ private:
     void    BuildTranslations();
     QString Tr(const QString& english) const;
     void    RetranslateUi();
+
+    // Per-project license verification.
+    void    BuildLicenseRows();
+    QString LicenseFilePath(const QString& projectId) const;
+    void    RunLicenseCheck(const QString& projectId);
+    void    RunAllLicenseChecks();
 
     // Scan baseDir for Data_User.* folders, grouped by project id.
     bool    ScanProjects(const QString& baseDir,
@@ -108,6 +117,12 @@ private:
     QLineEdit*   m_pBaseDirEdit{nullptr};
     QTreeWidget* m_pTree{nullptr};
 
+    // Per-project license inputs (one row per enabled project).
+    QWidget*     m_pLicenseContainer{nullptr};
+    QVBoxLayout* m_pLicenseLayout{nullptr};
+    QHash<QString, QLineEdit*> m_licenseEdits;
+    QStringList  m_licenseProjects;   // project ids with license check enabled
+
     // Retranslatable widgets / actions.
     QLabel*      m_pDirLabel{nullptr};
     QPushButton* m_pBrowseButton{nullptr};
@@ -124,6 +139,7 @@ private:
     QAction* m_pAboutAction{nullptr};
     QAction* m_pLangEnAction{nullptr};
     QAction* m_pLangZhAction{nullptr};
+    QAction* m_pLicenseSettingsAction{nullptr};
     QAction* m_pTrayShowAction{nullptr};
     QAction* m_pTrayQuitAction{nullptr};
 
