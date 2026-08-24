@@ -114,8 +114,8 @@ const char* const APP_STYLE =
     "QStatusBar::item { border: 0px; }";
 
 // Extract the project id from a folder name such as
-// "Data_User.F306.WFiber2" -> "F306". Returns an empty string if the
-// folder does not match the expected pattern.
+// "Data_User.F306.WFiber2" or "Data_User.V501_250826_LOF". Returns an
+// empty string if the folder does not match either supported pattern.
 QString ParseProjectId(const QString& folderName)
 {
     if (!folderName.startsWith(FOLDER_PREFIX)) {
@@ -124,13 +124,23 @@ QString ParseProjectId(const QString& folderName)
 
     const QString remainder = folderName.mid(FOLDER_PREFIX.length());
     const int32_t dotPos = static_cast<int32_t>(remainder.indexOf('.'));
-    if (dotPos <= 0) {
-        // Need <ProjectId>.<Variant>.
+    const int32_t underscorePos =
+        static_cast<int32_t>(remainder.indexOf('_'));
+
+    // Existing folders use <ProjectId>.<Variant>; some installations use
+    // <ProjectId>_<Variant>. Use whichever separator appears first so that
+    // underscores in the variant name remain valid.
+    int32_t separatorPos = dotPos;
+    if (separatorPos < 0 ||
+        (underscorePos >= 0 && underscorePos < separatorPos)) {
+        separatorPos = underscorePos;
+    }
+    if (separatorPos <= 0) {
         return QString();
     }
 
-    const QString projectId = remainder.left(dotPos).trimmed();
-    const QString variant   = remainder.mid(dotPos + 1).trimmed();
+    const QString projectId = remainder.left(separatorPos).trimmed();
+    const QString variant = remainder.mid(separatorPos + 1).trimmed();
     if (projectId.isEmpty() || variant.isEmpty()) {
         return QString();
     }
